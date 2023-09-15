@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<!--
+
+ *** OBS Stats Overlay v1.0 (2023-09-15)
+ *** https://github.com/rob-fi/obs-statsoverlay
+ ***
+ *** By default connects to 127.0.0.1
+ *** Host can be specified by adding ?host=x.x.x.x to the URL
+ *** Adding &name=name will add an optional name overlay
+ *** In OBS use file:/// and reference the local file. Set to canvas resolution.
+ 
+-->
+
+<head>
+
+    <style>
+		
+		html, body {
+		    padding: 0;
+			margin: 0;
+		}
+		
+        body {
+            text-align: center;
+			height: 100vh;
+			font-family: sans-serif;
+            color: #fff;
+        }
+
+        #stats-container {
+            font-size: 1.5em;
+            text-shadow: 2px 2px black;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 0.6em 0.3em 0.4em 0.3em;
+            width: max-content;
+			position: absolute;
+			bottom: 0;
+			left:50%;
+			transform: translate(-50%, 0);
+			border-radius: 0.2em 0.2em 0 0;
+        }
+		
+		#name {
+			font-size: 2.5em;
+			text-shadow: 0.05em 0.06em black;
+			padding: 0.2em 0.5em;
+			margin: 0.2em;
+			border-radius: 0.15em;
+			background-color: rgba(0, 0, 0, 0.7);
+			width: max-content;
+			position: absolute;
+			bottom: 10%;
+			left: 50%;
+			transform: translate(-50%, 0);
+		}
+
+        .stat, .stat-red, .stat-yellow {
+            padding: 0.3em;
+            margin: 0.1em;
+            background-color: rgba(0, 0, 0, 0.7);
+			border-radius: 0.2em;
+        }
+
+        .stat-red {
+			background-color: rgba(255, 0, 0, 0.8);
+        }
+
+        .stat-yellow {
+			background-color: rgba(255, 128, 0, 0.8);
+        }
+    </style>
+
+</head>
+
+<body>
+
+    <div id="stats-container"><span class="stat">Initialising...</span></div>
+
+    <script>
+
+        // Define some variables
+
+		let obsHost = "127.0.0.1" // Fallback IP if none defined in the query string
+		
+        const updateInterval = 5000; // Update interval in milliseconds
+		
+		// Define some variables for Mbps calc
+		
+		let prevOutputBytes = 0;
+		let prevTime = Date.now();
+
+
+/******* Request Sending Section *********************************************/
+
+        // Define the individual requests
+
+        // Request 1
+
+        const request1 = {
+            requestType: "GetStats",
+            requestId: "Req1",
+        };
+
+
+        // Request 2
+
+        const request2 = {
+            requestType: "GetStreamStatus",
+            requestId: "Req2",
+        };
+		
+		
+        // Request 3
+
+        const request3 = {
+            requestType: "GetOutputStatus",
+            requestId: "Req3",
+			requestData: {
+				outputName: "multi-output"
+			}
+        };
+
+
+        // Request 4
+
+        const request4 = {
+            requestType: "GetRecordStatus",
+            requestId: "Req4",
+        };
+		
+
+
+        // Glue together a batch request
+
+        const batchRequest = {
+            requestId: "batchRequest1", // Unique requestId for the batch
+            requests: [request1, request2, request3, request4],
+        };
+
+
+
+/******* Request Handling Section ********************************************/
+
+        // Handle the individual responses
+
+        // Response 1 (Main OBS Stats)
+
+        function Req1(responseData) {
+
+            // console.log(responseData);
+
+            statsHTML = `
+        <span class="stat">CPU: ${responseData.cpuUsage.toFixed(2)} %</span>
+        <span class="stat">DISK: ${responseData.availableDiskSpace.toFixed(0)} MB</span>
+        <span class="stat">MEM: ${responseData.memoryUsage.toFixed(0)} MB</span>
+		<span class="stat">REN Drop: ${responseData.renderSkippedFrames}</span>
+        <span class="stat">OUT Drop: ${responseData.outputSkippedFrames}</span>
+        <span class="stat">RT: ${responseData.averageFrameRenderTime.toFixed(2)} ms</span>
+        <span class="stat">FPS: ${responseData.activeFps.toFixed(2)}</span>
+    `;
+
+        };
+
+
+        // Response 2 (Main stream Stats)
+
+        function Req2(responseData) {
+
+            // console.log(responseData);
+			
+		const mbps = calculateMbps(responseData.outputBytes);
+
+            if (responseData.outputReconnecting) {
+
+
+                streamHTML = `
+        <span class="stat-yellow">STRM</span>
+    `;
+            } else if (responseData.outputActive) {
+
+
+                streamHTML = `
+        <span class="stat-red">STRM</span>
+		<span class="stat">${mbps.toFixed(2)} Mbps</span>
+    `;
+
+            } else {
+
+                streamHTML = "";
+            }
+        }
+		
+		
+		// Response 3 (Multi-RTMP Status)
+		
+        function Req3(responseData) {
+			
+			if (responseData) { // Catch stupid condition at startup
+
+            if (responseData.outputActive) {
+
+
+                rtmpHTML = `
+        <span class="stat-red">M-RTMP</span>
+    `;
+
+            } else {
+
+                rtmpHTML = "";
+            }
+        } else { rtmpHTML = ""; }
+
+		}
+		
+        // Response 4 (Recording)
+
+        function Req4(responseData) {
+
+			if (responseData.outputActive) {
+
+                recHTML = `
+        <span class="stat-red">REC</span>
+
+    `;
+
+            } else {
+
+                recHTML = "";
+            }
+        }
+
+
+/******* Page Update and Calculation Section *********************************/
+
+        // Update the web page
+
+        function updateHTML() {
+            const statsContainer = document.getElementById("stats-container");
+
+			
+            // Combine the stats and stream HTML
+			
+            const finalHTML = statsHTML + recHTML + rtmpHTML + streamHTML;
+
+
+            // Set the HTML content of the statsContainer
+			
+            statsContainer.innerHTML = finalHTML;
+
+        }
+
+
+		// Function to calculate Mbps
+		
+		function calculateMbps(currentOutputBytes) {
+			const currentTime = Date.now();
+			const byteDifference = currentOutputBytes - prevOutputBytes;
+			const timeDifferenceSeconds = (currentTime - prevTime) / 1000; // Convert to seconds
+
+			// Calculate Mbps (1 byte = 8 bits)
+			const megabitsPerSecond = (byteDifference * 8) / (timeDifferenceSeconds * 1000000);
+
+			// Update previous values
+			prevOutputBytes = currentOutputBytes;
+			prevTime = currentTime;
+
+			return megabitsPerSecond;
+		}
+
+
+		// Handle the URL querystring
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const qsHost = urlParams.get('host');
+		const qsName = urlParams.get('name');
+		
+		if (urlParams.has('host')) {
+			obsHost = qsHost;
+		}
+		
+		if (urlParams.has('name')) {
+				document.write(`
+		<div id="name">${qsName}</div>
+    `);
+		}
+
+
+
+
+/******* Websocket Functions *************************************************/
+
+        // Function to send a WebSocket request
+		
+        function sendRequest(requestType, requestId, requestData = {}) {
+            if (socket.readyState === WebSocket.OPEN) {
+                const request = {
+                    op: 6, // OpCode 6 for Request
+                    d: {
+                        requestType,
+                        requestId,
+                        requestData
+                    }
+                };
+                socket.send(JSON.stringify(request));
+            } else {
+                console.error("WebSocket connection is not open.");
+            }
+        }
+		
+		// Open connection to OBS websocket
+		
+		document.getElementById("stats-container").innerHTML = "<span class=\"stat\">Connecting...</span>";
+		
+        const socket = new WebSocket("ws://" + obsHost + ":4455");
+
+
+		// Identify to OBS websocket
+
+        socket.addEventListener("open", (event) => {
+            console.log("Connected to OBS WebSocket");
+            document.getElementById("stats-container").innerHTML = "<span class=\"stat\">Connected.</span>";
+
+            const identifyMessage = {
+                "op": 1, // OpCode 1 for Identify
+                "d": {
+                    "rpcVersion": 1, // Replace with your desired rpcVersion
+                    // "authentication": "your_authentication_string", // Include if required
+                    // "eventSubscriptions": 33 // Include if needed
+                }
+            };
+            socket.send(JSON.stringify(identifyMessage));
+			
+			sendBatchRequest();
+        });
+		
+		
+
+        // Send the batch request to obs-websocket
+		
+        function sendBatchRequest() {
+            if (socket.readyState === WebSocket.OPEN) {
+                const request = {
+                    op: 8, // OpCode 8 for RequestBatch
+                    d: batchRequest,
+                };
+                socket.send(JSON.stringify(request));
+				// console.log(request);
+            } else {
+                console.error("WebSocket connection is not open.");
+            }
+        }
+
+
+
+        // Handle the batch response in your message event listener
+		
+        socket.addEventListener("message", (event) => {
+            const message = JSON.parse(event.data);
+            // console.log("WebSocket Message received:", message);
+
+            if (message.op === 9 && message.d.requestId === "batchRequest1") {
+                // This is the response to your batch request
+				
+                // Handle the individual results within message.d.requests
+                const responses = message.d.results;
+
+                for (const response of responses) {
+
+                    window[response.requestId](response.responseData);
+                }
+				
+				
+				// Call to update the webpage
+				
+                updateHTML();
+            }
+
+        });
+
+
+		// Handle disconnection from OBS
+
+        socket.addEventListener("close", (event) => {
+            console.log("Disconnected from OBS WebSocket");
+            document.getElementById("stats-container").innerHTML = "<span class=\"stat\">Disconnected.</span>";
+			
+			setTimeout(function(){
+				socket.close();
+				window.location.reload();
+			}, 10000);
+        });
+
+
+		// Handle some sort of error
+		
+        socket.addEventListener("error", (error) => {
+            console.error("WebSocket Error:", error);
+        });
+
+
+
+        // Set up a timer to periodically send requests
+		
+        setInterval(() => {
+            sendBatchRequest();
+        }, updateInterval);
+		
+		
+    </script>
+</body>
+
+</html>
